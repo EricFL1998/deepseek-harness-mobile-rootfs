@@ -1,5 +1,16 @@
 name: Build & Release Rootfs
 
+# The image is rebuilt for exactly two reasons, plus a manual run:
+#
+#   1. a new @deepseek-ai/dsh release (this workflow resolves the latest RC);
+#   2. a new bridge plugin release (the plugin repository dispatches
+#      `bridge-release` here after publishing its version-marker tag).
+#
+# There is no schedule: rebuilding on a timer would publish identical images and
+# advance the rootfs number for no reason. The version check below is the guard
+# either way — if neither the DSH engine nor the bundled plugin moved, the run
+# resolves and stops.
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,9 +26,11 @@ on:
         description: 'Bridge plugin version to bundle (e.g. 1.1.0). Leave empty to use the plugin repository latest release.'
         required: false
         default: ''
-  schedule:
-    # Check for new upstream releases weekly on Mondays
-    - cron: '0 2 * * 1'
+  # A new bridge plugin release rebuilds the image, so a device that downloads
+  # fresh gets the newest plugin already bundled. The plugin repository sends
+  # this after publishing its version-marker release.
+  repository_dispatch:
+    types: [bridge-release]
 
 permissions:
   contents: write
@@ -56,12 +69,6 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$USER_ROOTFS" ]; then
-            ROOTFS_VER="$USER_ROOTFS"
-          else
-            ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
-          fi
-
           # The bridge plugin version comes from its own repository's latest
           # release. It is stamped into runtimeVersion as -bridge<version>, which
           # is how the Android client tells an in-place plugin upgrade apart from
@@ -77,25 +84,57 @@ jobs:
             exit 1
           fi
 
+          # Build only when the version triple actually moved. The image is
+          # rebuilt for exactly two reasons: a new DSH release, or a new bridge
+          # plugin release. A manual dispatch may still force a rebuild.
+          #
+          # The comparison reads the newest published image's runtimeVersion,
+          # which carries all three segments, so "already current" means all three
+          # match rather than just the rootfs number.
+          LATEST_TAG=$(curl -s -H "User-Agent: rootfs-builder" \
+            "https://api.github.com/repos/EricFL1998/deepseek-harness-mobile-rootfs/releases?per_page=1" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['tag_name'] if d else '')")
+          LATEST_RUNTIME=""
+          if [ -n "$LATEST_TAG" ]; then
+            LATEST_RUNTIME=$(curl -s -H "User-Agent: rootfs-builder" \
+              "https://github.com/EricFL1998/deepseek-harness-mobile-rootfs/releases/download/$LATEST_TAG/rootfs-manifest.json" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('runtimeVersion',''))" 2>/dev/null || echo "")
+          fi
+          CURRENT_TRIPLE="${DSH_VER}|${BRIDGE_VER}"
+          LATEST_TRIPLE=""
+          if [ -n "$LATEST_RUNTIME" ]; then
+            LATEST_TRIPLE=$(python3 scripts/version_triple.py "$LATEST_RUNTIME")
+          fi
+          echo "Latest published runtimeVersion: ${LATEST_RUNTIME:-<none>}"
+          echo "Latest triple: ${LATEST_TRIPLE:-<none>}"
+          echo "Wanted triple: $CURRENT_TRIPLE"
+
+          if [ -n "$USER_ROOTFS" ]; then
+            # An explicit rootfs version is always honoured.
+            ROOTFS_VER="$USER_ROOTFS"
+            BUILD=true
+          elif [ -n "$LATEST_TRIPLE" ] && [ "$LATEST_TRIPLE" = "$CURRENT_TRIPLE" ]; then
+            ROOTFS_VER=""
+            BUILD=false
+            echo "dsh and bridge are unchanged since $LATEST_TAG; nothing to rebuild."
+          else
+            ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
+            BUILD=true
+          fi
+
           TAG="rootfs-v${ROOTFS_VER}"
           echo "Resolved DSH Version: $DSH_VER"
-          echo "Resolved Rootfs Version: $ROOTFS_VER"
           echo "Resolved Bridge Version: $BRIDGE_VER"
-          echo "Resolved Release Tag: $TAG"
-
-          # Check if tag already exists on GitHub
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "User-Agent: rootfs-builder" \
-            "https://api.github.com/repos/EricFL1998/deepseek-harness-mobile-rootfs/releases/tags/$TAG")
-          
-          if [ "$HTTP_STATUS" = "200" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "Release tag $TAG already exists and triggered by schedule. Skipping build."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ "$BUILD" = "true" ]; then
+            echo "Resolved Rootfs Version: $ROOTFS_VER"
+            echo "Resolved Release Tag: $TAG"
             echo "dsh_version=$DSH_VER" >> "$GITHUB_OUTPUT"
             echo "rootfs_version=$ROOTFS_VER" >> "$GITHUB_OUTPUT"
             echo "bridge_version=$BRIDGE_VER" >> "$GITHUB_OUTPUT"
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
           fi
 
   build-amd64:
