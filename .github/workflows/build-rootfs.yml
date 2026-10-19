@@ -4,53 +4,75 @@ on:
   workflow_dispatch:
     inputs:
       dsh_version:
-        description: 'Target @deepseek-ai/dsh npm version (e.g. 0.2.1-rc.2 or 0.2.0-rc.2)'
-        required: true
-        default: '0.2.1-rc.2'
+        description: 'Target @deepseek-ai/dsh npm version (e.g. 0.2.1-rc.2). Leave empty to auto-resolve latest/next from npm.'
+        required: false
+        default: ''
       rootfs_version:
-        description: 'New rootfs semantic version (e.g. 1.0.1)'
-        required: true
-        default: '1.0.1'
-      auto_release:
-        description: 'Create GitHub release and upload assets'
-        type: boolean
-        required: true
-        default: true
+        description: 'Rootfs semantic version (e.g. 1.0.0, 1.0.1). Leave empty to auto-increment from latest GitHub release.'
+        required: false
+        default: ''
   schedule:
-    # Check for new upstream releases weekly
+    # Check for new upstream releases weekly on Mondays
     - cron: '0 2 * * 1'
 
 permissions:
   contents: write
 
 jobs:
-  check-version:
+  resolve-version:
     runs-on: ubuntu-latest
     outputs:
-      dsh_version: ${{ steps.resolve.outputs.dsh_version }}
-      rootfs_version: ${{ steps.resolve.outputs.rootfs_version }}
-      should_build: ${{ steps.resolve.outputs.should_build }}
+      dsh_version: ${{ steps.version.outputs.dsh_version }}
+      rootfs_version: ${{ steps.version.outputs.rootfs_version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      should_build: ${{ steps.version.outputs.should_build }}
     steps:
-      - name: Resolve target version
-        id: resolve
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compute Target Versions
+        id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "dsh_version=${{ github.event.inputs.dsh_version }}" >> "$GITHUB_OUTPUT"
-            echo "rootfs_version=${{ github.event.inputs.rootfs_version }}" >> "$GITHUB_OUTPUT"
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          USER_DSH="${{ github.event.inputs.dsh_version }}"
+          USER_ROOTFS="${{ github.event.inputs.rootfs_version }}"
+
+          if [ -n "$USER_DSH" ]; then
+            DSH_VER="$USER_DSH"
           else
-            # Check latest published next tag on npm
-            LATEST_NPM=$(npx -y pnpm view @deepseek-ai/dsh dist-tags.next 2>/dev/null || npx -y pnpm view @deepseek-ai/dsh dist-tags.latest)
-            echo "Found published version: $LATEST_NPM"
-            # In scheduled mode, you can inspect existing releases
-            echo "dsh_version=$LATEST_NPM" >> "$GITHUB_OUTPUT"
-            echo "rootfs_version=1.0.1" >> "$GITHUB_OUTPUT"
+            DSH_VER=$(python3 scripts/resolve_version.py npm_dsh)
+          fi
+
+          if [ -n "$USER_ROOTFS" ]; then
+            ROOTFS_VER="$USER_ROOTFS"
+          else
+            ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
+          fi
+
+          TAG="rootfs-v${ROOTFS_VER}"
+          echo "Resolved DSH Version: $DSH_VER"
+          echo "Resolved Rootfs Version: $ROOTFS_VER"
+          echo "Resolved Release Tag: $TAG"
+
+          # Check if tag already exists on GitHub
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "User-Agent: rootfs-builder" \
+            "https://api.github.com/repos/EricFL1998/deepseek-harness-mobile-rootfs/releases/tags/$TAG")
+          
+          if [ "$HTTP_STATUS" = "200" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Release tag $TAG already exists and triggered by schedule. Skipping build."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "dsh_version=$DSH_VER" >> "$GITHUB_OUTPUT"
+            echo "rootfs_version=$ROOTFS_VER" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
   build-amd64:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -59,9 +81,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and run x86_64 container
+      - name: Build and export x86_64 container
         run: |
-          DSH_VER="${{ needs.check-version.outputs.dsh_version }}"
+          DSH_VER="${{ needs.resolve-version.outputs.dsh_version }}"
           docker build \
             --platform linux/amd64 \
             --build-arg DSH_VERSION="${DSH_VER}" \
@@ -80,8 +102,8 @@ jobs:
           retention-days: 1
 
   build-arm64:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -93,9 +115,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and run arm64 container
+      - name: Build and export arm64 container
         run: |
-          DSH_VER="${{ needs.check-version.outputs.dsh_version }}"
+          DSH_VER="${{ needs.resolve-version.outputs.dsh_version }}"
           docker build \
             --platform linux/arm64 \
             --build-arg DSH_VERSION="${DSH_VER}" \
@@ -114,7 +136,7 @@ jobs:
           retention-days: 1
 
   package-and-release:
-    needs: [check-version, build-amd64, build-arm64]
+    needs: [resolve-version, build-amd64, build-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -139,30 +161,36 @@ jobs:
       - name: Deterministic package & checksums
         run: |
           python3 scripts/package_rootfs.py \
-            "${{ needs.check-version.outputs.dsh_version }}" \
-            "${{ needs.check-version.outputs.rootfs_version }}" \
+            "${{ needs.resolve-version.outputs.dsh_version }}" \
+            "${{ needs.resolve-version.outputs.rootfs_version }}" \
             tars/rootfs-x86_64.tar \
             tars/rootfs-arm64.tar \
             dist
 
-      - name: Upload release dist
+      - name: Upload release dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-dist-v${{ needs.check-version.outputs.rootfs_version }}
+          name: rootfs-dist-${{ needs.resolve-version.outputs.release_tag }}
           path: dist/*
-          retention-days: 7
+          retention-days: 14
 
       - name: Create GitHub Release
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.auto_release == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: rootfs-v${{ needs.check-version.outputs.rootfs_version }}
-          name: "Rootfs v${{ needs.check-version.outputs.rootfs_version }} (DSH ${{ needs.check-version.outputs.dsh_version }})"
+          tag_name: ${{ needs.resolve-version.outputs.release_tag }}
+          name: "Rootfs v${{ needs.resolve-version.outputs.rootfs_version }} (DSH ${{ needs.resolve-version.outputs.dsh_version }})"
           body: |
-            Debian 12 Bookworm rootfs image containing `@deepseek-ai/dsh@${{ needs.check-version.outputs.dsh_version }}`.
+            ## Rootfs v${{ needs.resolve-version.outputs.rootfs_version }}
             
-            ### Verification
-            Manifest and checksums are attached below.
+            - **Base OS**: Debian 12 (Bookworm) Slim
+            - **Bundled @deepseek-ai/dsh**: `${{ needs.resolve-version.outputs.dsh_version }}`
+            - **Profile**: `web` pre-installed
+            - **Runtime Environment**: Node.js 24, pnpm, Python 3, Git
+            
+            ### Assets
+            - `rootfs-x86_64.bin` (Android x86_64 emulator)
+            - `rootfs-arm64-v8a.bin` (Android arm64-v8a physical device / emulator)
+            - `rootfs-manifest.json` (Contract manifest for deepseek-harness-mobile)
           files: |
             dist/rootfs-x86_64.bin
             dist/rootfs-arm64-v8a.bin
