@@ -11,6 +11,10 @@ on:
         description: 'Rootfs semantic version (e.g. 1.0.0, 1.0.1). Leave empty to auto-increment from latest GitHub release.'
         required: false
         default: ''
+      bridge_version:
+        description: 'Bridge plugin version to bundle (e.g. 1.1.0). Leave empty to use the plugin repository latest release.'
+        required: false
+        default: ''
   schedule:
     # Check for new upstream releases weekly on Mondays
     - cron: '0 2 * * 1'
@@ -24,6 +28,7 @@ jobs:
     outputs:
       dsh_version: ${{ steps.version.outputs.dsh_version }}
       rootfs_version: ${{ steps.version.outputs.rootfs_version }}
+      bridge_version: ${{ steps.version.outputs.bridge_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       should_build: ${{ steps.version.outputs.should_build }}
     steps:
@@ -57,9 +62,25 @@ jobs:
             ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
           fi
 
+          # The bridge plugin version comes from its own repository's latest
+          # release. It is stamped into runtimeVersion as -bridge<version>, which
+          # is how the Android client tells an in-place plugin upgrade apart from
+          # a mandatory image re-download.
+          USER_BRIDGE="${{ github.event.inputs.bridge_version }}"
+          if [ -n "$USER_BRIDGE" ]; then
+            BRIDGE_VER="$USER_BRIDGE"
+          else
+            BRIDGE_VER=$(python3 scripts/resolve_version.py bridge)
+          fi
+          if ! echo "$BRIDGE_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: bridge version '$BRIDGE_VER' is not a plain semver triple."
+            exit 1
+          fi
+
           TAG="rootfs-v${ROOTFS_VER}"
           echo "Resolved DSH Version: $DSH_VER"
           echo "Resolved Rootfs Version: $ROOTFS_VER"
+          echo "Resolved Bridge Version: $BRIDGE_VER"
           echo "Resolved Release Tag: $TAG"
 
           # Check if tag already exists on GitHub
@@ -72,6 +93,7 @@ jobs:
           else
             echo "dsh_version=$DSH_VER" >> "$GITHUB_OUTPUT"
             echo "rootfs_version=$ROOTFS_VER" >> "$GITHUB_OUTPUT"
+            echo "bridge_version=$BRIDGE_VER" >> "$GITHUB_OUTPUT"
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
@@ -93,6 +115,7 @@ jobs:
           docker build \
             --platform linux/amd64 \
             --build-arg DSH_VERSION="${DSH_VER}" \
+            --build-arg BRIDGE_VERSION="${{ needs.resolve-version.outputs.bridge_version }}" \
             -t dsh-build:amd64 .
           
           docker create --name c_amd64 dsh-build:amd64
@@ -127,6 +150,7 @@ jobs:
           docker build \
             --platform linux/arm64 \
             --build-arg DSH_VERSION="${DSH_VER}" \
+            --build-arg BRIDGE_VERSION="${{ needs.resolve-version.outputs.bridge_version }}" \
             -t dsh-build:arm64 .
           
           docker create --name c_arm64 dsh-build:arm64
@@ -169,6 +193,7 @@ jobs:
           python3 scripts/package_rootfs.py \
             "${{ needs.resolve-version.outputs.dsh_version }}" \
             "${{ needs.resolve-version.outputs.rootfs_version }}" \
+            "${{ needs.resolve-version.outputs.bridge_version }}" \
             tars/rootfs-x86_64.tar \
             tars/rootfs-arm64.tar \
             dist
@@ -184,15 +209,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve-version.outputs.release_tag }}
-          name: "Rootfs v${{ needs.resolve-version.outputs.rootfs_version }} (DSH ${{ needs.resolve-version.outputs.dsh_version }})"
+          name: "Rootfs v${{ needs.resolve-version.outputs.rootfs_version }} (DSH ${{ needs.resolve-version.outputs.dsh_version }}, bridge ${{ needs.resolve-version.outputs.bridge_version }})"
           body: |
             ## Rootfs v${{ needs.resolve-version.outputs.rootfs_version }}
-            
+
             - **Base OS**: Debian 12 (Bookworm) Slim
             - **Bundled @deepseek-ai/dsh**: `${{ needs.resolve-version.outputs.dsh_version }}`
+            - **Bundled dsh-mobile-bridge-plugin**: `${{ needs.resolve-version.outputs.bridge_version }}`
             - **Profile**: `web` pre-installed
             - **Runtime Environment**: Node.js 24, pnpm, Python 3, Git
-            
+
+            `runtimeVersion` is `${{ needs.resolve-version.outputs.rootfs_version }}-dsh${{ needs.resolve-version.outputs.dsh_version }}-bridge${{ needs.resolve-version.outputs.bridge_version }}`.
+            A device that only lags on the `bridge` segment can upgrade the plugin in
+            place and does **not** need this image.
+
             ### Assets
             - `rootfs-x86_64.bin` (Android x86_64 emulator)
             - `rootfs-arm64-v8a.bin` (Android arm64-v8a physical device / emulator)

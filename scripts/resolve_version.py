@@ -40,10 +40,39 @@ def get_latest_dsh_npm_version():
         # 3. 兜底
         return dist_tags.get("latest", "0.2.1-rc.2")
 
+def get_latest_bridge_version():
+    """Latest bridge plugin release tag, as a bare version.
+
+    The plugin repository publishes asset-free releases whose tag IS the version
+    declaration, so this is the one place that answers "which plugin version
+    should the image bundle".
+    """
+    url = "https://api.github.com/repos/EricFL1998/deepseek-harness-mobile-bridge-plugin/releases?per_page=10"
+    req = urllib.request.Request(url, headers={"User-Agent": "rootfs-builder"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode())
+            for rel in data:
+                if rel.get("draft") or rel.get("prerelease"):
+                    continue
+                tag = rel.get("tag_name", "")
+                m = re.match(r"^v(\d+\.\d+\.\d+)$", tag)
+                if m:
+                    return m.group(1)
+    except Exception as e:
+        print(f"Notice: failed to fetch the bridge plugin release: {e}")
+    return None
+
+
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "resolve"
     if action == "npm_dsh":
         print(get_latest_dsh_npm_version())
+    elif action == "bridge":
+        version = get_latest_bridge_version()
+        if version is None:
+            sys.exit("Error: no bridge plugin release found; cannot determine which version to bundle.")
+        print(version)
     elif action == "next_rootfs_ver":
         maj, min_v, pat = get_latest_github_release_tag()
         # if no releases exist yet, start at 1.0.0, else bump patch

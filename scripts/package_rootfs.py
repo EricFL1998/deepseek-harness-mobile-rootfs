@@ -25,14 +25,16 @@ def compress_tar(src_tar: str, dst_bin: str) -> tuple[str, int]:
 
 def main():
     if len(sys.argv) < 5:
-        print("Usage: package_rootfs.py <dsh_version> <rootfs_version> <x86_tar> <arm64_tar> [output_dir]")
+        print("Usage: package_rootfs.py <dsh_version> <rootfs_version> <bridge_version> "
+              "<x86_tar> <arm64_tar> [output_dir]")
         sys.exit(1)
 
     dsh_version = sys.argv[1]
     rootfs_version = sys.argv[2]
-    x86_tar = sys.argv[3]
-    arm64_tar = sys.argv[4]
-    out_dir = sys.argv[5] if len(sys.argv) > 5 else "dist"
+    bridge_version = sys.argv[3]
+    x86_tar = sys.argv[4]
+    arm64_tar = sys.argv[5]
+    out_dir = sys.argv[6] if len(sys.argv) > 6 else "dist"
 
     os.makedirs(out_dir, exist_ok=True)
     x86_bin = os.path.join(out_dir, "rootfs-x86_64.bin")
@@ -41,10 +43,18 @@ def main():
     x86_sha, x86_size = compress_tar(x86_tar, x86_bin)
     arm64_sha, arm64_size = compress_tar(arm64_tar, arm64_bin)
 
+    # Three segments, one meaning each. The Android client splits this string to
+    # decide what kind of update it is looking at:
+    #   - rootfs or dsh segment moved   -> the image must be re-downloaded
+    #   - only the bridge segment moved -> the plugin can be upgraded in place,
+    #     so the image update stays optional
+    runtime_version = f"{rootfs_version}-dsh{dsh_version}-bridge{bridge_version}"
+
     manifest_fragment = {
         "rootfsName": "dsh-rootfs",
-        "runtimeVersion": f"{rootfs_version}-dsh{dsh_version}",
+        "runtimeVersion": runtime_version,
         "releaseTag": f"rootfs-v{rootfs_version}",
+        "bridgeVersion": bridge_version,
         "baseDistro": "debian-12-slim",
         "libc": "glibc",
         "pageSize": "16k-compatible",
@@ -53,6 +63,7 @@ def main():
             "node-24",
             "pnpm",
             f"@deepseek-ai/dsh@{dsh_version}",
+            f"dsh-mobile-bridge-plugin@{bridge_version}",
             "python3",
             "git"
         ],

@@ -1,0 +1,19 @@
+feat: bundle the bridge plugin and stamp its version into runtimeVersion
+
+New installs now ship with dsh-mobile-bridge-plugin already in the web profile,
+so a fresh device gets the compatibility layer without a second round trip.
+
+runtimeVersion becomes three segments, one meaning each:
+
+  1.1.0-dsh0.2.1-rc.2-bridge1.1.0
+
+The Android client splits it to decide what kind of update a device faces: a
+rootfs or dsh segment change means the image must be re-downloaded, while a
+bridge-only change is an optional image update because the plugin can be
+upgraded in place inside the rootfs. That is what lets a plugin release ship
+without forcing existing users to re-download 300 MB.
+
+The plugin is installed from its GitHub source tarball, not npm: it is not
+published, and lib/ is committed there so no build step runs here. The build
+validates that the version, entry, and bundle patch all resolve, so an image can
+never ship a profile that silently loads no bridge.
