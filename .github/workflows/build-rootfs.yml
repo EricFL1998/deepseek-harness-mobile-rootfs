@@ -89,16 +89,15 @@ jobs:
           # plugin release. A manual dispatch may still force a rebuild.
           #
           # The comparison reads the newest published image's runtimeVersion,
-          # which carries all three segments, so "already current" means all three
-          # match rather than just the rootfs number.
-          LATEST_TAG=$(curl -s -H "User-Agent: rootfs-builder" \
-            "https://api.github.com/repos/EricFL1998/deepseek-harness-mobile-rootfs/releases?per_page=1" \
-            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['tag_name'] if d else '')")
-          LATEST_RUNTIME=""
-          if [ -n "$LATEST_TAG" ]; then
-            LATEST_RUNTIME=$(curl -s -H "User-Agent: rootfs-builder" \
-              "https://github.com/EricFL1998/deepseek-harness-mobile-rootfs/releases/download/$LATEST_TAG/rootfs-manifest.json" \
-              | python3 -c "import json,sys; print(json.load(sys.stdin).get('runtimeVersion',''))" 2>/dev/null || echo "")
+          # which carries all three segments, so "already current" means the DSH
+          # engine and the bundled plugin both match.
+          #
+          # An unreadable baseline is reported loudly rather than silently
+          # treated as "nothing to compare", because that would rebuild on every
+          # trigger and defeat the point of the guard.
+          LATEST_RUNTIME=$(python3 scripts/latest_runtime_version.py || echo "")
+          if [ -z "$LATEST_RUNTIME" ]; then
+            echo "::warning::Could not read the newest published runtimeVersion. Building, because an unknown baseline cannot be proven current."
           fi
           CURRENT_TRIPLE="${DSH_VER}|${BRIDGE_VER}"
           LATEST_TRIPLE=""
