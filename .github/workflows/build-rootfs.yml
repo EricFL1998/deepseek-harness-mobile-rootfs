@@ -115,7 +115,7 @@ jobs:
           elif [ -n "$LATEST_TRIPLE" ] && [ "$LATEST_TRIPLE" = "$CURRENT_TRIPLE" ]; then
             ROOTFS_VER=""
             BUILD=false
-            echo "dsh and bridge are unchanged since $LATEST_TAG; nothing to rebuild."
+            echo "dsh and bridge are unchanged since the published $LATEST_RUNTIME; nothing to rebuild."
           else
             ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
             BUILD=true
