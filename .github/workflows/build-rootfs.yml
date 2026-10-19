@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dsh_version:
-        description: 'Target @deepseek-ai/dsh npm version (e.g. 0.2.1-rc.2). Leave empty to auto-resolve latest/next from npm.'
+        description: 'Target @deepseek-ai/dsh npm version (must be an rc release, e.g. 0.2.1-rc.2). Leave empty to auto-resolve latest RC.'
         required: false
         default: ''
       rootfs_version:
@@ -43,6 +43,12 @@ jobs:
             DSH_VER="$USER_DSH"
           else
             DSH_VER=$(python3 scripts/resolve_version.py npm_dsh)
+          fi
+
+          # 校验版本是否符合 RC 版本模式 (-rc.N)
+          if ! echo "$DSH_VER" | grep -qE -- '-rc\.[0-9]+$'; then
+            echo "Error: DSH version '$DSH_VER' is not an RC version! Only RC builds are permitted."
+            exit 1
           fi
 
           if [ -n "$USER_ROOTFS" ]; then

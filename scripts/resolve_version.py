@@ -24,8 +24,21 @@ def get_latest_dsh_npm_version():
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode())
         dist_tags = data.get("dist-tags", {})
-        # prefer next if available, else latest
-        return dist_tags.get("next") or dist_tags.get("latest")
+        versions = list(data.get("versions", {}).keys())
+
+        # 1. 优先检查 dist-tags.next 或 dist-tags.latest 是否为 rc 版本
+        for tag in ["next", "latest"]:
+            v = dist_tags.get(tag, "")
+            if re.search(r"-rc\.\d+$", v):
+                return v
+
+        # 2. 从所有已发布的版本列表中逆序筛选最新的 rc 版本 (忽略 alpha / dev 等预发布版本)
+        rc_versions = [v for v in versions if re.search(r"-rc\.\d+$", v)]
+        if rc_versions:
+            return rc_versions[-1]
+
+        # 3. 兜底
+        return dist_tags.get("latest", "0.2.1-rc.2")
 
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "resolve"
