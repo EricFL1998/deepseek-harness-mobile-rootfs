@@ -1,0 +1,170 @@
+name: Build & Release Rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: 'Target @deepseek-ai/dsh npm version (e.g. 0.2.1-rc.2 or 0.2.0-rc.2)'
+        required: true
+        default: '0.2.1-rc.2'
+      rootfs_version:
+        description: 'New rootfs semantic version (e.g. 1.0.1)'
+        required: true
+        default: '1.0.1'
+      auto_release:
+        description: 'Create GitHub release and upload assets'
+        type: boolean
+        required: true
+        default: true
+  schedule:
+    # Check for new upstream releases weekly
+    - cron: '0 2 * * 1'
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      dsh_version: ${{ steps.resolve.outputs.dsh_version }}
+      rootfs_version: ${{ steps.resolve.outputs.rootfs_version }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+    steps:
+      - name: Resolve target version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "dsh_version=${{ github.event.inputs.dsh_version }}" >> "$GITHUB_OUTPUT"
+            echo "rootfs_version=${{ github.event.inputs.rootfs_version }}" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            # Check latest published next tag on npm
+            LATEST_NPM=$(npx -y pnpm view @deepseek-ai/dsh dist-tags.next 2>/dev/null || npx -y pnpm view @deepseek-ai/dsh dist-tags.latest)
+            echo "Found published version: $LATEST_NPM"
+            # In scheduled mode, you can inspect existing releases
+            echo "dsh_version=$LATEST_NPM" >> "$GITHUB_OUTPUT"
+            echo "rootfs_version=1.0.1" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-amd64:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and run x86_64 container
+        run: |
+          DSH_VER="${{ needs.check-version.outputs.dsh_version }}"
+          docker build \
+            --platform linux/amd64 \
+            --build-arg DSH_VERSION="${DSH_VER}" \
+            -t dsh-build:amd64 .
+          
+          docker create --name c_amd64 dsh-build:amd64
+          mkdir -p output
+          docker export -o output/rootfs-x86_64.tar c_amd64
+          docker rm c_amd64
+
+      - name: Upload amd64 tar
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-tar-amd64
+          path: output/rootfs-x86_64.tar
+          retention-days: 1
+
+  build-arm64:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and run arm64 container
+        run: |
+          DSH_VER="${{ needs.check-version.outputs.dsh_version }}"
+          docker build \
+            --platform linux/arm64 \
+            --build-arg DSH_VERSION="${DSH_VER}" \
+            -t dsh-build:arm64 .
+          
+          docker create --name c_arm64 dsh-build:arm64
+          mkdir -p output
+          docker export -o output/rootfs-arm64.tar c_arm64
+          docker rm c_arm64
+
+      - name: Upload arm64 tar
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-tar-arm64
+          path: output/rootfs-arm64.tar
+          retention-days: 1
+
+  package-and-release:
+    needs: [check-version, build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download amd64 tar
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs-tar-amd64
+          path: tars
+
+      - name: Download arm64 tar
+        uses: actions/download-artifact@v4
+        with:
+          name: rootfs-tar-arm64
+          path: tars
+
+      - name: Deterministic package & checksums
+        run: |
+          python3 scripts/package_rootfs.py \
+            "${{ needs.check-version.outputs.dsh_version }}" \
+            "${{ needs.check-version.outputs.rootfs_version }}" \
+            tars/rootfs-x86_64.tar \
+            tars/rootfs-arm64.tar \
+            dist
+
+      - name: Upload release dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-dist-v${{ needs.check-version.outputs.rootfs_version }}
+          path: dist/*
+          retention-days: 7
+
+      - name: Create GitHub Release
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.auto_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rootfs-v${{ needs.check-version.outputs.rootfs_version }}
+          name: "Rootfs v${{ needs.check-version.outputs.rootfs_version }} (DSH ${{ needs.check-version.outputs.dsh_version }})"
+          body: |
+            Debian 12 Bookworm rootfs image containing `@deepseek-ai/dsh@${{ needs.check-version.outputs.dsh_version }}`.
+            
+            ### Verification
+            Manifest and checksums are attached below.
+          files: |
+            dist/rootfs-x86_64.bin
+            dist/rootfs-arm64-v8a.bin
+            dist/rootfs-manifest.json
+          fail_on_unmatched_files: true

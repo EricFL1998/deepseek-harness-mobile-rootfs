@@ -1,0 +1,10 @@
+.idea/
+.DS_Store
+*.tar
+*.tar.gz
+*.bin
+output/
+tars/
+dist/
+__pycache__/
+*.pyc
