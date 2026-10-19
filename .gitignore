@@ -8,3 +8,4 @@ tars/
 dist/
 __pycache__/
 *.pyc
+COMMIT_MSG.txt
