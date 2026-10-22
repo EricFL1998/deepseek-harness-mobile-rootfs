@@ -50,6 +50,29 @@ RUN dsh plugin --profile web add ${BRIDGE_REPOSITORY}#v${BRIDGE_VERSION} \
        fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n'); \
      "
 
+# 3b. 手机 profile 默认启用官方 workflow（与桌面一致）。
+#
+# web-app 只带 ptc-runtime；workflow-ptc（引擎）和 tool-workflow（模型工具）
+# 是可选行，默认禁用，于是模型没有 workflow 工具。这里写进 profile 的 patch 层，
+# 与官方插件页里打开这两个开关等价；客户端的 ensureOfficialWorkflowEnabled()
+# 也会对升级上来的旧镜像做同样的幂等调用。
+RUN mkdir -p /root/.dsh/profiles/web \
+  && node -e " \
+       const fs = require('node:fs'); \
+       const path = '/root/.dsh/profiles/web/cordis.patch.yml'; \
+       const rows = [ \
+         '- id: tool-workflow', \
+         '  disabled: false', \
+         '- id: workflow-ptc', \
+         '  disabled: false', \
+       ].join('\\n'); \
+       const current = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : ''; \
+       if (!current.includes('id: tool-workflow')) { \
+         fs.appendFileSync(path, (current.endsWith('\\n') || current === '' ? '' : '\\n') + rows + '\\n'); \
+       } \
+     " \
+  && grep -q 'id: tool-workflow' /root/.dsh/profiles/web/cordis.patch.yml
+
 # 4. Validation: the plugin must resolve and declare its bundle patch, or the
 #    image would ship a profile that silently loads no bridge.
 RUN node -e " \
