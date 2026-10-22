@@ -1,17 +1,26 @@
 name: Build & Release Rootfs
 
-# The image is rebuilt for exactly two reasons, plus a manual run:
+# The image is rebuilt for exactly three reasons, plus a manual run:
 #
 #   1. a new @deepseek-ai/dsh release (this workflow resolves the latest RC);
 #   2. a new bridge plugin release (the plugin repository dispatches
-#      `bridge-release` here after publishing its version-marker tag).
+#      `bridge-release` here after publishing its version-marker tag);
+#   3. a change to the image recipe itself (Dockerfile / scripts), because an
+#      image-only fix (packaging, native dependencies) has no version triple to
+#      move and would otherwise never reach devices.
 #
 # There is no schedule: rebuilding on a timer would publish identical images and
-# advance the rootfs number for no reason. The version check below is the guard
-# either way — if neither the DSH engine nor the bundled plugin moved, the run
-# resolves and stops.
+# advance the rootfs number for no reason. For (1) and (2) the version check
+# below is the guard — if neither the DSH engine nor the bundled plugin moved,
+# the run resolves and stops. A recipe push (3) always forces a rebuild.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'scripts/**'
+      - '.github/workflows/build-rootfs.yml'
   workflow_dispatch:
     inputs:
       dsh_version:
@@ -85,8 +94,13 @@ jobs:
           fi
 
           # Build only when the version triple actually moved. The image is
-          # rebuilt for exactly two reasons: a new DSH release, or a new bridge
-          # plugin release. A manual dispatch may still force a rebuild.
+          # rebuilt for exactly three reasons: a new DSH release, a new bridge
+          # plugin release, or a change to the image recipe itself. A manual
+          # dispatch may still force a rebuild.
+          #
+          # A recipe push (Dockerfile/scripts) has no version-triple change by
+          # definition — the fix is inside the image — so it always forces a
+          # rebuild; otherwise an image-only fix could never be published.
           #
           # The comparison reads the newest published image's runtimeVersion,
           # which carries all three segments, so "already current" means the DSH
@@ -112,6 +126,11 @@ jobs:
             # An explicit rootfs version is always honoured.
             ROOTFS_VER="$USER_ROOTFS"
             BUILD=true
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # Image recipe changed: force a rebuild even when the triple matches.
+            ROOTFS_VER=$(python3 scripts/resolve_version.py next_rootfs_ver)
+            BUILD=true
+            echo "Image recipe changed; rebuilding the image as $ROOTFS_VER."
           elif [ -n "$LATEST_TRIPLE" ] && [ "$LATEST_TRIPLE" = "$CURRENT_TRIPLE" ]; then
             ROOTFS_VER=""
             BUILD=false

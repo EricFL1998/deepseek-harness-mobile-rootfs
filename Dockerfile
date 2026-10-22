@@ -73,5 +73,42 @@ RUN node -e " \
     "
 ENV BRIDGE_VERSION=${BRIDGE_VERSION}
 
-# 5. Validation
+# 5. proot/Android 下 libc 探测失败时的平台包兜底
+#
+# node-addon-require-builtin 在运行时先探测 libc 家族，再按
+# `node-addon-require-builtin-linux-<arch>-gnu|musl` 找平台包。proot 里三条
+# 探测路径都可能落空：
+#   - 读 node 的 ELF PT_INTERP（fs.readSync/pread）会触发 ENOSYS；
+#   - /proc/self/maps 映射的是 Android 的 bionic，不是 glibc；
+#   - process.report 取不到 glibcVersionRuntime。
+# 全部落空后脚本默认按 musl 查找，而 Debian 镜像里装的是 -gnu 包，于是
+# Host 启动时报 `Cannot find module .../node-addon-require-builtin/build/...`
+# 并以 exit=1 退出。
+#
+# 镜像本身就是 glibc，把 musl 平台名软链到同一份 gnu 包即可：探测猜错时也能
+# 加载正确的二进制，探测正确时这条软链不会被用到。对任意同族包都生效。
+#
+# 校验：两种平台名都能解析到可用的 ESM loader binding。
+RUN set -eux; \
+    modules=/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules; \
+    arch="$(node -p 'process.arch')"; \
+    for gnu in "$modules"/*-linux-"$arch"-gnu; do \
+      [ -d "$gnu" ] || continue; \
+      musl="${gnu%-gnu}-musl"; \
+      [ -e "$musl" ] || ln -s "$(basename "$gnu")" "$musl"; \
+    done; \
+    node -e " \
+      const modules = process.argv[1]; \
+      for (const suffix of ['gnu', 'musl']) { \
+        const name = modules + '/node-addon-require-builtin-linux-' + process.arch + '-' + suffix; \
+        const addon = require(name); \
+        const loader = addon.requireBuiltin('internal/modules/esm/loader'); \
+        if (typeof loader.getOrInitializeCascadedLoader !== 'function') { \
+          throw new Error(name + ' returned an unusable ESM loader'); \
+        } \
+      } \
+      console.log('native addon resolves for gnu and musl platform names'); \
+    " "$modules"
+
+# 6. Validation
 RUN node /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js --version
