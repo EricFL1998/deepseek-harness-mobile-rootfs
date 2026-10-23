@@ -1,0 +1,20 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js
+@@ -7,7 +7,7 @@
+ import { FileSystem, FsError, FsTargetKey, FsVersion } from "@deepseek-ai/dsh-fs";
+ import { randomUUID } from "node:crypto";
+ import { createReadStream, realpath } from "node:fs";
+-import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
++import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+ import { TextDecoder, promisify } from "node:util";
+ //#region lib/types/win32.js
+ /**
+@@ -528,7 +528,7 @@
+ 	let handle;
+ 	let stagingCreated = false;
+ 	try {
+-		await mkdir(stagingDir, { mode: 448 });
++		try { await mkdir(stagingDir, { mode: 448 }); } catch (error) { await writeFile(absolutePath, content, { mode: mode ?? 384 }); return; }
+ 		stagingCreated = true;
+ 		await chmod(stagingDir, 448);
+ 		handle = await open(tempPath, "wx", 384);

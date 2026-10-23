@@ -1,0 +1,65 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/lib/index.js
+@@ -299,7 +299,8 @@
+ 		...stream.spillPath !== void 0 ? { spillPath: stream.spillPath } : {}
+ 	});
+ 	return {
+-		cwd,
++		// proot/remote 调用下 spec.workdir 可能为空；schema 要求 cwd 必填。
++		cwd: cwd ?? result.cwd ?? process.cwd(),
+ 		exitCode: result.exitCode,
+ 		signal: result.signal,
+ 		timedOut: result.timedOut,
+@@ -333,9 +334,8 @@
+ 		required: true
+ 	},
+ 	cwd: {
+-		type: "string",
+-		required: true
+-	}
++	type: "string"
++}
+ };
+ function apply(ctx, config = {}) {
+ 	const backgroundEnabled = config.enableRunInBackground ?? true;
+@@ -383,6 +383,7 @@
+ 	* registers its process as a job at its start; without one the tool is
+ 	* foreground-only and the executor's deadline kills the command.
+ 	*/
++
+ 	const bashTool = (jobs) => {
+ 		const background = jobs !== void 0;
+ 		const promote = background && promoteOnTimeout;
+@@ -544,9 +545,8 @@
+ 								const: "promoted"
+ 							},
+ 							cwd: {
+-								type: "string",
+-								required: true
+-							},
++	type: "string"
++},
+ 							jobId: {
+ 								type: "string",
+ 								required: true
+@@ -571,9 +571,8 @@
+ 								const: "foreground"
+ 							},
+ 							cwd: {
+-								type: "string",
+-								required: true
+-							},
++	type: "string"
++},
+ 							exitCode: {
+ 								required: true,
+ 								oneOf: [{ type: "integer" }, { type: "null" }]
+@@ -650,7 +649,7 @@
+ 					type: "text",
+ 					text: value.kind === "background" ? `started background job ${value.jobId}` : value.kind === "promoted" ? renderPromoted(value) : renderResult(value, escalationModes)
+ 				}],
+-				presentationMeta: (_args, value) => ({ cwd: value.cwd })
++				presentationMeta: (_args, value) => value.cwd === void 0 ? {} : { cwd: value.cwd }
+ 			},
+ 			async execute(args, exec) {
+ 				const standingPolicy = resolveSandboxPolicy(exec);

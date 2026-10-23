@@ -1,0 +1,64 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js
+@@ -824,6 +824,15 @@
+ 		},
+ 		async execute(args, exec) {
+ 			const input = parseGlobArgs(args);
++			if (process.env.DSH_ANDROID_BRIDGE_PORT) {
++				const root = input.path === void 0 ? "." : toWorkdirRelative(input.path, exec.agent?.session.header.cwd ?? "/workspace");
++				const pattern = input.pattern ?? "**/*";
++				const searchRoot = input.path ?? ".";
++				const findCommand = pattern.includes("**") ? `find ${shq(searchRoot)} -type f` : `find ${shq(searchRoot)} -type f -name ${shq(pattern)}`;
++				const bridged = await androidBridgeShell(findCommand, exec.agent?.session.header.cwd ?? "/workspace");
++				const paths = String(bridged.stdout ?? "").split("\n").filter((line) => line.length > 0).map((line) => toWorkdirRelative(line, exec.agent?.session.header.cwd ?? "/workspace"));
++				return { root, paths };
++			}
+ 			const run = await runRipgrep(ctx, exec, "glob", buildGlobCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes);
+ 			const root = input.path === void 0 ? "." : toWorkdirRelative(input.path, run.workdir);
+ 			if (run.noMatches) return {
+@@ -1139,6 +1148,21 @@
+ 			presentationMeta: (_args, value) => grepSearchMeta(retainGrepMatches(value.matches, caps.maxMatches, caps.maxLineBytes), caps.maxMetaBytes)
+ 		},
+ 		async execute(args, exec) {
++			if (process.env.DSH_ANDROID_BRIDGE_PORT) {
++				const parsed = parseGrepArgs(args);
++				const searchRoot = parsed.path ?? ".";
++				const command = `grep -rn -- ${shq(parsed.pattern)} ${shq(searchRoot)} || true`;
++				const bridged = await androidBridgeShell(command, exec.agent?.session.header.cwd ?? "/workspace");
++				const workdir = exec.agent?.session.header.cwd ?? "/workspace";
++				const matches = [];
++				for (const line of String(bridged.stdout ?? "").split("\n")) {
++					const first = line.indexOf(":");
++					const second = line.indexOf(":", first + 1);
++					if (first <= 0 || second <= first) continue;
++					matches.push({ path: toWorkdirRelative(line.slice(0, first), workdir), lineNumber: Number(line.slice(first + 1, second)), line: line.slice(second + 1) });
++				}
++				return { matches };
++			}
+ 			const run = await runRipgrep(ctx, exec, "grep", buildGrepCommand(parseGrepArgs(args)), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes);
+ 			if (run.noMatches) return { matches: [] };
+ 			const all = [];
+@@ -1270,3 +1294,23 @@
+ }
+ //#endregion
+ export { Config, GLOB_MAX_RESULTS, GLOB_VCS_EXCLUDES, GREP_MAX_LINE_BYTES, GREP_MAX_MATCHES, RAW_OUTPUT_MAX_BYTES, SEARCH_GRACE_MS, SEARCH_META_MAX_BYTES, SEARCH_STDERR_MAX_BYTES, SEARCH_TIMEOUT_MS, SearchError, apply, applyGlobTool, applyGrepTool, buildGlobCommand, buildGrepCommand, formatGlobOutput, formatGrepMatches, formatGrepOutput, inject, name, parseGlobArgs, parseGrepArgs, parseGrepMatches, presentGlobCall, presentGlobResult, presentGrepCall, presentGrepResult, previewLine, resolveRgPath, runRipgrep, sampleAcrossTopLevel, toWorkdirRelative, trySaveFormattedResult };
++
++function shq(value) { return JSON.stringify(String(value)); }
++async function androidBridgeShell(command, cwd, timeoutMs = 120000) {
++	const net = await import("node:net");
++	const fs = await import("node:fs");
++	const port = Number(process.env.DSH_ANDROID_BRIDGE_PORT);
++	if (!port) throw new Error("bridge port unavailable");
++	// 桥只接受带本地 token 的请求；token 由 App 每次启动 Host 时轮换并写入 guest 的 DSH_HOME。
++	const auth = String(fs.readFileSync("/root/.dsh/.bridge_token", "utf8")).trim();
++	if (!auth) throw new Error("bridge token unavailable");
++	const payload = JSON.stringify({ jsonrpc: "2.0", id: String(Date.now()), auth, method: "android_exec_shell", params: { command, cwd, timeoutMs } }) + "\n";
++	return await new Promise((resolve, reject) => {
++		const socket = net.connect({ host: "127.0.0.1", port }, () => socket.write(payload));
++		let buffer = "";
++		socket.setEncoding("utf8");
++		socket.on("data", (chunk) => { buffer += chunk; const index = buffer.indexOf("\n"); if (index < 0) return; const line = buffer.slice(0, index); socket.destroy(); try { const message = JSON.parse(line); if (message.error) reject(new Error(message.error.message)); else resolve(message.result); } catch (error) { reject(error); } });
++		socket.on("error", reject);
++		socket.setTimeout(1_800_000, () => { socket.destroy(); reject(new Error("android bridge timeout")); });
++	});
++}

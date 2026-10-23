@@ -1,0 +1,32 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-spill-local/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-spill-local/lib/index.js
+@@ -4,7 +4,7 @@
+ import { SpillLocator, SpillStore } from "@deepseek-ai/dsh-spill";
+ import { lstat, mkdir, open, readdir, realpath, rmdir, unlink } from "node:fs/promises";
+ import { createHash, randomBytes } from "node:crypto";
+-import { mkdtempSync } from "node:fs";
++import { mkdirSync, mkdtempSync } from "node:fs";
+ //#region lib/types/store.js
+ /**
+ * Cordis-free storage mechanics for the local spill backend: private
+@@ -32,7 +32,11 @@
+ * @returns The private root path.
+ */
+ function privateRoot() {
+-	defaultRoot ??= mkdtempSync(join(tmpdir(), DEFAULT_ROOT_PREFIX));
++	if (defaultRoot !== void 0) return defaultRoot;
++	// proot 下 mkdtemp/mkdir 可能不可用；使用 Host 启动前预创建的固定目录。
++	const fixed = "/root/.dsh/tmp/spill";
++	try { mkdirSync(fixed, { recursive: true, mode: 448 }); } catch {}
++	defaultRoot = fixed;
+ 	return defaultRoot;
+ }
+ /**
+@@ -569,3 +573,7 @@
+ };
+ //#endregion
+ export { DEFAULT_ROOT_PREFIX, LocalSpillStore, LocalSpillStore as default, discoverDefaultRoots, encodeSegment, isErrno, privateRoot, saveTextFile, sessionDir, sweepSpillRoots };
++
++
++
++

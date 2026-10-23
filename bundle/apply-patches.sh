@@ -1,27 +1,29 @@
-set -e
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")"
-cp "/patches/dsh-app-boot-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-spill-local/lib/index.js")"
-cp "/patches/dsh-spill-local-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-spill-local/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js")"
-cp "/patches/dsh-atomic-write-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plugin-package-inventory-deepseek/lib/index.js")"
-cp "/patches/dsh-plugin-package-inventory-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plugin-package-inventory-deepseek/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/output.js")"
-cp "/patches/dsh-subprocess-output.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/output.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js")"
-cp "/patches/dsh-subprocess-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js")"
-cp "/patches/dsh-subprocess-runner-launch.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js")"
-cp "/patches/dsh-fs-local-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/lib/index.js")"
-cp "/patches/dsh-tool-bash-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js")"
-cp "/patches/dsh-tool-fs-search-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js")"
-cp "/patches/dsh-storage-json-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js")"
-cp "/patches/dsh-client-modules-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js"
-mkdir -p "$(dirname "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/")"
-cp "/patches/dsh-speech-sensevoice-index.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/"
+#!/bin/sh
+# Apply the Android runtime patches to the DSH packages installed in this image.
+#
+# The patches are ordinary unified diffs generated from a known base DSH
+# version. They are applied here, at image build time, against whatever DSH
+# version the build resolved: if upstream moved a patched region, `patch`
+# fails and the image build fails instead of publishing a version-mixed image.
+#
+# The final image is therefore "latest DSH + Android patches" and the client
+# does not need to overwrite package files at runtime.
+set -eu
+
+patches_dir=${PATCHES_DIR:-/patches/android}
+root=${ROOT:-/}
+count=0
+
+for patch_file in "$patches_dir"/*.patch; do
+    [ -f "$patch_file" ] || continue
+    echo "applying $(basename "$patch_file")"
+    patch -p1 -d "$root" --batch --no-backup-if-mismatch < "$patch_file"
+    count=$((count + 1))
+done
+
+if [ "$count" -eq 0 ]; then
+    echo "no Android patches found under $patches_dir" >&2
+    exit 1
+fi
+
+echo "applied $count Android patches"

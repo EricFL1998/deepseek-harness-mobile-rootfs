@@ -1,0 +1,24 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-storage-json/lib/index.js
+@@ -35,8 +35,19 @@
+ 		await rename(tmp, path);
+ 		await fsyncDirectory(dirname(path));
+ 	} catch (error) {
+-		await rm(tmp, { force: true });
+-		throw error;
++		try {
++			const handle = await open(path, "w", 384);
++			try {
++				await handle.writeFile(data, "utf8");
++				await handle.sync();
++			} finally {
++				await handle.close();
++			}
++			return;
++		} catch (fallbackError) {
++			try { await rm(tmp, { force: true }); } catch {}
++			throw fallbackError;
++		}
+ 	}
+ }
+ /** fsync a POSIX directory so a just-renamed entry is crash-durable. */

@@ -76,7 +76,12 @@ def main():
             "arm64-v8a": arm64_sha
         },
         "archiveSizeBytes": x86_size,
-        "prootLibrary": "libproot.so"
+        "prootLibrary": "libproot.so",
+        # The image was built from the resolved DSH version and the Android
+        # patches were applied to its package files. Clients can accept any DSH
+        # segment and must skip their own version-pinned full-file patches.
+        "androidPatched": True,
+        "androidPatchRevision": 1
     }
 
     manifest_path = os.path.join(out_dir, "rootfs-manifest.json")

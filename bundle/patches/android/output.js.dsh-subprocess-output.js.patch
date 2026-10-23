@@ -1,0 +1,23 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/output.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/output.js
+@@ -1,4 +1,4 @@
+-import { closeSync, mkdtempSync, openSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
++import { closeSync, mkdtempSync, openSync, rmdirSync, unlinkSync, writeSync , mkdirSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { randomBytes } from "node:crypto";
+@@ -18,7 +18,7 @@
+ * external cleanup).
+ */
+ function privateSpillDir() {
+-	defaultSpillDir ??= mkdtempSync(join(tmpdir(), "dsh-subprocess-"));
++	defaultSpillDir ??= dshSafeMkdtemp(join(tmpdir(), "dsh-subprocess-"));
+ 	return defaultSpillDir;
+ }
+ /* v8 ignore next 4 -- exit listeners run after the coverage dump; removal is verified by the CI /tmp residue measurement. */
+@@ -237,3 +237,5 @@
+ };
+ //#endregion
+ export { OutputCollector, logSpillFailure, prepareManagedProcessBinding };
++
++function dshSafeMkdtemp(prefix) { const target = "/root/.dsh/tmp/spill"; try { mkdirSync(target, { recursive: true, mode: 448 }); } catch {} return target; }

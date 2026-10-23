@@ -1,0 +1,55 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js
+@@ -1028,15 +1028,36 @@
+ 	];
+ 	if (spec.stdio.control === "pipe") {
+ 		while (stdio.length < SUBPROCESS_CONTROL_FD) stdio.push("ignore");
++		// fd 7 必须是真实的双向管道：PTC / workflow worker 会在子进程里
++		// new Socket({fd:7}) 走控制通道。之前这里被改成 "ignore"，导致
++		// launched.control 为 null，workflow 直接报 reading 'on' of null。
+ 		stdio.push("overlapped");
+ 	}
+-	const child = (internals.spawn ?? spawn)(program, args, {
+-		cwd: spec.cwd,
+-		env: controlEnvironment(childEnv(spec.env), spec.stdio.control),
+-		stdio,
+-		detached: platform !== "win32",
+-		windowsHide: platform === "win32"
+-	});
++	let child;
++	try {
++		let resolvedProgram = program;
++		if (resolvedProgram === "bash") resolvedProgram = "/bin/bash";
++		else if (resolvedProgram === "sh") resolvedProgram = "/bin/sh";
++		if (!resolvedProgram.includes("/")) {
++			const searchPath = String(spec.env.PATH ?? process.env.PATH ?? "");
++			for (const dir of searchPath.split(":")) {
++				const candidate = join(dir, resolvedProgram);
++				if (existsSync(candidate)) { resolvedProgram = candidate; break; }
++			}
++		}
++		console.error("[DSH_SPAWN] try", program, "->", resolvedProgram, "cwd", spec.cwd, "exists", existsSync(spec.cwd), "path", String(spec.env.PATH ?? process.env.PATH ?? "").slice(0, 80));
++		child = (internals.spawn ?? spawn)(resolvedProgram, args, {
++			cwd: existsSync(spec.cwd) ? spec.cwd : "/",
++			env: controlEnvironment(childEnv(spec.env), spec.stdio.control),
++			stdio,
++			detached: false,
++			windowsHide: platform === "win32"
++		});
++	} catch (error) {
++		console.error("[DSH_SPAWN] throw", spec.argv, spec.cwd, error && error.code, error && error.syscall, error && error.message);
++		throw error;
++	}
++	child.on("error", (e) => console.error("[DSH_SPAWN] failed", spec.argv, spec.cwd, e && e.code, e && e.syscall, e && e.message));
+ 	const direct = directChildResult(child);
+ 	const pid = child.pid;
+ 	const owner = fallbackOwner(platform, pid, child, internals.taskkill ?? taskkillProcessTree, internals.linuxProcessGroupHasLiveMembers ?? linuxProcessGroupHasLiveMembers, direct);
+@@ -1527,3 +1548,8 @@
+ }
+ //#endregion
+ export { bindManagedProcess as C, createProcessInspector as D, validateSubprocessSpec as E, controlPipe as O, loadLinuxExecve as S, spawnSubprocess as T, parseWindowsRunnerResult as _, resolveWindowsExecutable as a, serializeRunnerError as b, runnerStdio as c, cleanupLinuxLaunchFiles as d, consumeLinuxLaunchRequest as f, linuxLaunchFilesFromLocator as g, isWindowsTerminateRequest as h, parseRunnerTargetArgv as i, spawnRunnerInvocation as l, deserializeRunnerError as m, WINDOWS_RUNNER_SELECTION as n, runnerEnvironment as o, createLinuxLaunchFiles as p, consumeRunnerSelection as r, runnerInvocationAvailable as s, SUBPROCESS_RUNNER_ENV as t, targetEnvironment as u, parseWindowsStartRequest as v, childEnv as w, writeLinuxStartupError as x, readLinuxStartupError as y };
++
++
++
++
++

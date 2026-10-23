@@ -1,0 +1,73 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-modules/lib/index.js
+@@ -764,7 +764,10 @@
+ 		const pathLike = loaderName.startsWith(".") || loaderName.startsWith("file:") || isAbsolute(loaderName);
+ 		const expectedPackageName = pathLike ? void 0 : exactPackageSpecifier(loaderName);
+ 		if (!pathLike && expectedPackageName === void 0) return void 0;
+-		const internal = this.ctx.loader.internal;
++		if (expectedPackageName !== void 0) {
++			const installed = this.locateInstalledPackage(expectedPackageName, baseUrl);
++			if (installed !== void 0) return installed;
++		}		const internal = this.ctx.loader.internal;
+ 		if (internal === void 0 || typeof Reflect.get(internal, "resolveSync") !== "function") {
+ 			if (expectedPackageName === void 0) {
+ 				const moduleUrl = loaderName.startsWith("file:") ? loaderName : isAbsolute(loaderName) ? pathToFileURL(loaderName).href : new URL(loaderName, baseUrl).href;
+@@ -790,7 +793,57 @@
+ 		}
+ 		return this.nearestPackage(moduleUrl, expectedPackageName);
+ 	}
+-	nearestPackage(moduleUrl, expectedPackageName) {
++	/**
++	 * Resolve one package manifest from the tree's own node_modules directories.
++	 *
++	 * The production Host artifact runs the Loader with a resolver that does not see
++	 * the profile tree on Android (proot), and `existsSync` is unreliable there too, so
++	 * a manifest counts only when it can be read. Without this the boot graph composes
++	 * empty and the browser shell cannot start.
++	 *
++	 * @param packageName - package to locate.
++	 * @param baseUrl - resolution base of the tree that owns the row.
++	 * @returns the manifest path and package name, or undefined.
++	 */
++	locateInstalledPackage(packageName, baseUrl) {
++		const seen = new Set();
++		const readable = (candidate) => {
++			try {
++				JSON.parse(readFileSync(candidate, "utf8"));
++				return true;
++			} catch {
++				return false;
++			}
++		};
++		const visit = (startDir) => {
++			if (typeof startDir !== "string" || startDir.length === 0) return void 0;
++			if (seen.has(startDir)) return void 0;
++			seen.add(startDir);
++			const candidate = join(startDir, "node_modules", packageName, "package.json");
++			if (readable(candidate)) return { path: candidate, packageName };
++			return void 0;
++		};
++		const baseDir = baseUrl.startsWith("file:") ? dirname(fileURLToPath(baseUrl)) : baseUrl;
++		const bases = [join(baseDir, "web"), baseDir];
++		const dshHome = process.env.DSH_HOME;
++		if (typeof dshHome === "string" && dshHome.length > 0) bases.push(join(dshHome, "profiles", "web"));
++		bases.push(process.cwd());
++		for (const base of bases) {
++			const hit = visit(base);
++			if (hit !== void 0) return hit;
++		}
++		for (const start of [baseDir, dirname(fileURLToPath(import.meta.url))]) {
++			let dir = start;
++			for (let depth = 0; depth < 10; depth += 1) {
++				const hit = visit(dir);
++				if (hit !== void 0) return hit;
++				const parent = dirname(dir);
++				if (parent === dir) break;
++				dir = parent;
++			}
++		}
++		return void 0;
++	}	nearestPackage(moduleUrl, expectedPackageName) {
+ 		if (!moduleUrl.startsWith("file:")) return void 0;
+ 		let dir = dirname(fileURLToPath(moduleUrl));
+ 		while (true) {

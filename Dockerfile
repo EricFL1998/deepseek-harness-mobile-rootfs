@@ -1,13 +1,16 @@
 ARG DSH_VERSION=0.2.1-rc.2
 ARG BRIDGE_VERSION=1.1.0
 
-# Host entry bundle stage: esbuild the DSH boot entry with the same runtime
-# patches the Android client applies at boot. The final image keeps the normal
-# unpatched package (the client patches it again) and only gains the bundled
-# entry, which it prefers when present.
+# Host entry bundle stage: esbuild the DSH boot entry with the Android runtime
+# patches applied. The patches are unified diffs, not whole-file copies, so this
+# stage follows whatever DSH_VERSION the build resolved and fails if upstream
+# moved a patched region.
 FROM node:24-bookworm-slim AS host-bundle-builder
 ARG DSH_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends patch \
+  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --no-audit --no-fund @deepseek-ai/dsh@${DSH_VERSION} esbuild
 COPY bundle/patches /patches
 COPY bundle/apply-patches.sh /apply-patches.sh
@@ -29,11 +32,12 @@ ENV PATH=$PNPM_HOME/bin:$PATH
 # it is not published, and `lib/` is committed there so no build step runs here.
 ARG BRIDGE_REPOSITORY=https://github.com/EricFL1998/deepseek-harness-mobile-bridge-plugin
 
-# 1. Install system runtime tools (Python 3, Git, CA certificates)
+# 1. Install system runtime tools (Python 3, Git, CA certificates, patch)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     git \
     ca-certificates \
+    patch \
   && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info /usr/share/lintian
 
 # 2. Install pnpm and target @deepseek-ai/dsh
@@ -46,7 +50,15 @@ RUN npm install -g --no-audit --no-fund @deepseek-ai/dsh@${DSH_VERSION} pnpm \
   && printf '#!/bin/sh\nexec /usr/local/bin/dsh "$@"\n' > /opt/dsh/bin/dsh \
   && chmod +x /opt/dsh/bin/dsh
 
-# Bundle the Host boot entry (see host-bundle-builder above).
+# 2b. Apply the Android runtime patches to the installed DSH packages.
+#
+# The image is now "latest DSH + Android patches": the client can accept any DSH
+# version from this image and must not overwrite these files with its own
+# (version-pinned) full-file copies. The manifest records `androidPatched`.
+COPY bundle/patches /patches
+COPY bundle/apply-patches.sh /apply-patches.sh
+RUN sh /apply-patches.sh \
+  && rm -rf /patches /apply-patches.sh
 COPY --from=host-bundle-builder /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/host.bundle.mjs /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/host.bundle.mjs
 
 # 3. Install the mobile bridge plugin into the web profile.

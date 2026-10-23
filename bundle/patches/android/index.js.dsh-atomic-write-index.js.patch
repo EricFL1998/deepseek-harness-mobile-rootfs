@@ -1,0 +1,53 @@
+--- a/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js
++++ b/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js
+@@ -71,9 +71,10 @@
+ 			flag: "wx"
+ 		});
+ 		await renameAtomicTemp(temp, filename);
+-	} catch (error) {
+-		await rm(temp, { force: true });
+-		throw error;
++	} catch {
++		// proot 下 rename/unlink 可能返回 ENOSYS，退化为直接写目标文件。
++		await writeFile(filename, content, { mode: options.mode });
++		try { await rm(temp, { force: true }); } catch {}
+ 	}
+ }
+ /** Whether an exclusive create found an existing lock. */
+@@ -187,34 +188,8 @@
+ * @returns the operation's result; the lock releases on both outcomes.
+ */
+ async function withFileLock(filename, operation, options) {
+-	const lockPath = `${filename}.lock`;
+-	const deadline = Date.now() + (options?.waitMs ?? DEFAULT_LOCK_WAIT_MS);
+-	let delay = LOCK_RETRY_INITIAL_MS;
+-	let retriedUnconfirmedPermissionError = false;
+-	for (;;) {
+-		options?.signal?.throwIfAborted();
+-		try {
+-			await writeFile(lockPath, `${process.pid}\n`, {
+-				mode: 384,
+-				flag: "wx"
+-			});
+-			break;
+-		} catch (error) {
+-			if (!await isLockContention(error, lockPath)) {
+-				if (process.platform !== "win32" || error?.code !== "EPERM" || retriedUnconfirmedPermissionError) throw error;
+-				retriedUnconfirmedPermissionError = true;
+-			} else if (await takeOverExitedLock(lockPath)) continue;
+-		}
+-		if (Date.now() >= deadline) throw new Error(`atomic-write: timed out waiting for the writer lock at ${lockPath}`);
+-		await setTimeout$1(delay, void 0, { signal: options?.signal });
+-		delay = Math.min(delay * 2, LOCK_RETRY_MAX_MS);
+-	}
+-	try {
+-		options?.signal?.throwIfAborted();
+-		return await operation();
+-	} finally {
+-		await rm(lockPath, { force: true });
+-	}
++	// Android/proot 下 unlink 不可用会残留 .lock；单进程 Host 直接执行操作。
++	return await operation();
+ }
+ //#endregion
+ export { withFileLock, writeFileAtomic };
