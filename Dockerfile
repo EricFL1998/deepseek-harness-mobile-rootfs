@@ -1,5 +1,22 @@
 ARG DSH_VERSION=0.2.1-rc.2
 ARG BRIDGE_VERSION=1.1.0
+
+# Host entry bundle stage: esbuild the DSH boot entry with the same runtime
+# patches the Android client applies at boot. The final image keeps the normal
+# unpatched package (the client patches it again) and only gains the bundled
+# entry, which it prefers when present.
+FROM node:24-bookworm-slim AS host-bundle-builder
+ARG DSH_VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+RUN npm install -g --no-audit --no-fund @deepseek-ai/dsh@${DSH_VERSION} esbuild
+COPY bundle/patches /patches
+COPY bundle/apply-patches.sh /apply-patches.sh
+RUN sh /apply-patches.sh
+WORKDIR /usr/local/lib/node_modules/@deepseek-ai/dsh/lib
+RUN esbuild bin.js --bundle --platform=node --format=esm --target=node24 \
+      --outfile=host.bundle.mjs --external:*.node --external:node:* \
+      --log-level=warning && ls -lh host.bundle.mjs
+
 FROM node:24-bookworm-slim
 
 ARG DSH_VERSION
@@ -28,6 +45,9 @@ RUN npm install -g --no-audit --no-fund @deepseek-ai/dsh@${DSH_VERSION} pnpm \
   && mkdir -p /opt/dsh/bin \
   && printf '#!/bin/sh\nexec /usr/local/bin/dsh "$@"\n' > /opt/dsh/bin/dsh \
   && chmod +x /opt/dsh/bin/dsh
+
+# Bundle the Host boot entry (see host-bundle-builder above).
+COPY --from=host-bundle-builder /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/host.bundle.mjs /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/host.bundle.mjs
 
 # 3. Install the mobile bridge plugin into the web profile.
 #

@@ -20,6 +20,7 @@ on:
     paths:
       - 'Dockerfile'
       - 'scripts/**'
+      - 'bundle/**'
       - '.github/workflows/build-rootfs.yml'
   workflow_dispatch:
     inputs:
